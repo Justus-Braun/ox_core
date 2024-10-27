@@ -1,6 +1,12 @@
 import { ClassInterface } from 'classInterface';
 import { DeleteVehicle, IsPlateAvailable, IsVinAvailable, SaveVehicleData, SetVehicleColumn } from './db';
-import { getRandomString, getRandomAlphanumeric, getRandomChar, getRandomInt } from '@overextended/ox_lib';
+import {
+  getRandomString,
+  getRandomAlphanumeric,
+  getRandomChar,
+  getRandomInt,
+  VehicleProperties,
+} from '@overextended/ox_lib';
 import { PLATE_PATTERN } from '../../common/config';
 import type { Dict, VehicleData } from 'types';
 import { GetVehicleData, GetVehicleNetworkType } from '../../common/vehicles';
@@ -21,6 +27,7 @@ export class OxVehicle extends ClassInterface {
   owner?: number;
   group?: string;
   #metadata: Dict<any>;
+  #properties: VehicleProperties;
   #stored: string | null;
 
   protected static members: Dict<OxVehicle> = {};
@@ -133,6 +140,7 @@ export class OxVehicle extends ClassInterface {
     make: string,
     stored: string | null,
     metadata: Dict<any>,
+    properties: VehicleProperties,
     id?: number,
     vin?: string,
     owner?: number,
@@ -149,14 +157,20 @@ export class OxVehicle extends ClassInterface {
     this.vin = vin;
     this.owner = owner;
     this.group = group;
+    this.#properties = properties;
     this.#metadata = metadata || {};
     this.#stored = stored;
 
     if (this.id) this.setStored(null, false);
 
     OxVehicle.add(this.entity, this);
-    setVehicleProperties(entity, metadata.properties);
+    SetVehicleNumberPlateText(this.entity, properties.plate || this.plate);
+    setVehicleProperties(entity, properties);
     emit('ox:spawnedVehicle', this.entity, this.id);
+
+    const state = this.getState();
+
+    state.set('initVehicle', true, true);
   }
 
   /** Stores a value in the vehicle's metadata. */
@@ -177,10 +191,14 @@ export class OxVehicle extends ClassInterface {
     return this.#stored;
   }
 
+  getProperties() {
+    return this.#properties;
+  }
+
   #getSaveData() {
     if (!this.id) return;
 
-    return [this.#stored, JSON.stringify(this.#metadata), this.id];
+    return [this.#stored, JSON.stringify({ ...this.#metadata, properties: this.#properties }), this.id];
   }
 
   save() {
@@ -228,9 +246,15 @@ export class OxVehicle extends ClassInterface {
   setPlate(plate: string) {
     if (this.plate === plate) return;
 
-    this.plate = plate.padEnd(8);
+    this.plate = plate.length > 8 ? plate.substring(0, 8) : plate.padEnd(8);
 
     SetVehicleColumn(this.id, 'plate', this.plate);
+  }
+
+  setProperties(properties: VehicleProperties, apply?: boolean) {
+    this.#properties = properties;
+
+    if (apply) setVehicleProperties(this.entity, this.#properties);
   }
 
   async respawn(coords?: Vector3, rotation?: Vector3) {
@@ -248,7 +272,8 @@ export class OxVehicle extends ClassInterface {
     if (rotation) SetEntityRotation(this.entity, rotation.x, rotation.y, rotation.z, 2, false);
 
     OxVehicle.add(this.entity, this);
-    setVehicleProperties(this.entity, this.#metadata.properties);
+    SetVehicleNumberPlateText(this.entity, this.#properties.plate || this.plate);
+    setVehicleProperties(this.entity, this.#properties);
     emit('ox:spawnedVehicle', this.entity, this.id);
   }
 }

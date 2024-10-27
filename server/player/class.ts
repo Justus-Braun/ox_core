@@ -27,6 +27,7 @@ import { PayAccountInvoice } from 'accounts';
 import type { Character, Dict, NewCharacter, PlayerMetadata, OxGroup, CharacterLicense } from 'types';
 import { GetGroupPermissions } from '../../common';
 import { Licenses } from './license';
+import { CHARACTER_SLOTS } from 'config';
 
 export class OxPlayer extends ClassInterface {
   source: number | string;
@@ -37,7 +38,6 @@ export class OxPlayer extends ClassInterface {
   identifier: string;
   ped: number;
   #characters: Character[];
-  #inScope: Dict<true> = {};
   #metadata: Dict<any>;
   #statuses: Dict<number>;
   #groups: Dict<number>;
@@ -132,7 +132,6 @@ export class OxPlayer extends ClassInterface {
     super();
     this.source = source;
     this.#characters = [];
-    this.#inScope = {};
     this.#metadata = {};
     this.#statuses = {};
     this.#groups = {};
@@ -161,23 +160,6 @@ export class OxPlayer extends ClassInterface {
     return this.#metadata[key];
   }
 
-  /** Returns an object of all player id's in range of the player. */
-  getPlayersInScope() {
-    return this.#inScope;
-  }
-
-  /** Returns true if the target player id is in range of the player. */
-  isPlayerInScope(targetId: number) {
-    return targetId in this.#inScope;
-  }
-
-  /** Triggers an event on all players within range of the player. */
-  triggerScopedEvent(eventName: string, ...args: any[]) {
-    for (const id in this.#inScope) {
-      emitNet(eventName, id, ...args);
-    }
-  }
-
   async payInvoice(invoiceId: number) {
     if (!this.charId) return;
     return await PayAccountInvoice(invoiceId, this.charId);
@@ -186,8 +168,13 @@ export class OxPlayer extends ClassInterface {
   setActiveGroup(groupName?: string, temp?: boolean) {
     if (!this.charId || (groupName && !(groupName in this.#groups))) return false;
 
-    SetActiveGroup(this.charId, temp ? undefined : groupName);
+    const currentActiveGroup = this.get('activeGroup');
 
+    if (currentActiveGroup) GlobalState[`${currentActiveGroup}:activeCount`] -= 1;
+
+    if (groupName) GlobalState[`${groupName}:activeCount`] += 1;
+
+    SetActiveGroup(this.charId, temp ? undefined : groupName);
     this.set('activeGroup', groupName, true);
     emit('ox:setActiveGroup', this.source, groupName);
 
@@ -209,9 +196,10 @@ export class OxPlayer extends ClassInterface {
     if (!grade) {
       if (!currentGrade) return;
       if (!(await RemoveCharacterGroup(this.charId, group.name))) return;
-      if (this.get('activeGroup') === groupName) this.set('activeGroup', undefined, true);
 
       this.#removeGroup(group, currentGrade);
+
+      if (this.get('activeGroup') === groupName) this.set('activeGroup', undefined, true);
     } else {
       if (!group.grades[grade] && grade > 0)
         return console.warn(`Failed to set OxPlayer<${this.userId}> ${group.name}:${grade} (invalid grade)`);
@@ -413,6 +401,8 @@ export class OxPlayer extends ClassInterface {
 
     this.#groups[group.name] = grade;
     GlobalState[`${group.name}:count`] += 1;
+
+    if (group.name === this.get('activeGroup')) GlobalState[`${group.name}:activeCount`] += 1;
   }
 
   /** Removes the active character from the group and sets permissions. */
@@ -424,6 +414,8 @@ export class OxPlayer extends ClassInterface {
 
     delete this.#groups[group.name];
     GlobalState[`${group.name}:count`] -= 1;
+
+    if (group.name === this.get('activeGroup')) GlobalState[`${group.name}:activeCount`] -= 1;
   }
 
   /** Saves the active character to the database. */
@@ -487,7 +479,7 @@ export class OxPlayer extends ClassInterface {
 
   /** Registers a new character for the player. */
   async createCharacter(data: NewCharacter) {
-    if (this.charId) return;
+    if (this.charId || this.#characters.length >= CHARACTER_SLOTS) return;
 
     const stateId = await this.#generateStateId();
     const phoneNumber = await GeneratePhoneNumber();
@@ -543,7 +535,7 @@ export class OxPlayer extends ClassInterface {
 
     if (!metadata) return;
 
-    const statuses = JSON.parse(metadata.statuses as any) || this.#statuses;
+    const statuses = metadata.statuses || this.#statuses;
     const { isDead, gender, dateOfBirth, phoneNumber, health, armour } = metadata;
     const groups = await GetCharacterGroups(this.charId);
     const licenses = await GetCharacterLicenses(this.charId);
@@ -552,8 +544,7 @@ export class OxPlayer extends ClassInterface {
     character.armour = armour;
 
     groups.forEach(({ name, grade }) => this.#addGroup(name, grade));
-
-    licenses.forEach(({ name, data }) => (this.#licenses[name] = JSON.parse(data as string)));
+    licenses.forEach(({ name, data }) => (this.#licenses[name] = data));
 
     for (const name in Statuses) this.setStatus(name, statuses[name]);
 

@@ -8,14 +8,21 @@ setImmediate(async () => {
   const config = GetConfig();
 
   try {
-    pool = createPool(config);
+    const dbPool = createPool(config);
+    const conn = await dbPool.getConnection();
+    const info = conn.info!; // when would info be null? i'm sure we'll find out eventually!
+    const version = info.serverVersion;
+    const recommendedDb = `Install MariaDB 11.4+ for the best experience.\n- https://mariadb.com/kb/en/changes-improvements-in-mariadb-11-4/`;
 
-    const version: string = (await pool.execute('SELECT VERSION() as version'))[0].version;
+    conn.release();
 
-    if (!version.toLowerCase().match('mariadb'))
-      return console.error(`ox_core is specifically designed for use with MariaDB. You are using MySQL ${version}.`);
+    if (!version.mariaDb) return console.error(`MySQL ${version?.raw} is not supported. ${recommendedDb}`);
 
-    console.log(`${`^5[${version}]`} ^2Database server connection established!^0`);
+    if (!info.hasMinVersion(11, 4, 0)) return console.error(`${version.raw} is not supported. ${recommendedDb}`);
+
+    console.log(`${`^5[${version.raw}]`} ^2Database server connection established!^0`);
+
+    pool = dbPool;
   } catch (err) {
     console.log(
       `^3Unable to establish a connection to the database (${err.code})!\n^1Error ${err.errno}: ${err.message}^0`

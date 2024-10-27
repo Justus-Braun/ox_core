@@ -1,7 +1,7 @@
 import { addAce, addCommand, addPrincipal, removeAce, removePrincipal } from '@overextended/ox_lib/server';
-import { SelectGroups } from './db';
+import { InsertGroup, RemoveGroup, SelectGroups } from './db';
 import { OxPlayer } from 'player/class';
-import type { Dict, OxGroup, DbGroup } from 'types';
+import type { Dict, OxGroup, DbGroup, CreateGroupProperties, OxAccountRole } from 'types';
 import { GetGroupPermissions } from '../../common';
 import { GetGroupAccount } from 'accounts';
 import { CreateNewAccount } from 'accounts/db';
@@ -38,16 +38,15 @@ export function RemoveGroupPermission(groupName: string, grade: number, permissi
   GlobalState[`group.${groupName}:permissions`] = permissions;
 }
 
-async function CreateGroup(data: DbGroup) {
+function SetupGroup(data: DbGroup) {
   const group: OxGroup = {
     ...data,
-    grades: JSON.parse(data.grades as any),
-    accountRoles: JSON.parse(data.accountRoles as any),
     principal: `group.${data.name}`,
   };
 
   GlobalState[group.principal] = group;
   GlobalState[`${group.name}:count`] = 0;
+  GlobalState[`${group.name}:activeCount`] = 0;
 
   groups[group.name] = group;
   group.grades = group.grades.reduce(
@@ -78,10 +77,41 @@ async function CreateGroup(data: DbGroup) {
   }
 
   DEV: console.info(`Instantiated OxGroup<${group.name}>`);
+
+  return group;
 }
 
-//@ts-ignore todo
-function DeleteGroup(group: OxGroup) {
+// @todo more data validation and error handling
+export async function CreateGroup(data: CreateGroupProperties) {
+  if (groups[data.name]) throw new Error(`Cannot create OxGroup<${data.name}> (group already exists with that name)`);
+
+  const grades = data.grades.map((grade) => grade.label);
+  const accountRoles = data.grades.reduce((acc, grade, index) => {
+    if (grade.accountRole) acc[index + 1] = grade.accountRole;
+    return acc;
+  }, {} as Dict<OxAccountRole>);
+
+  const group: DbGroup = {
+    ...data,
+    grades: grades,
+    accountRoles: accountRoles,
+    hasAccount: data.hasAccount ?? false,
+  };
+
+  const response = await InsertGroup(group);
+
+  if (response) {
+    SetupGroup(group);
+    GlobalState.groups = GlobalState.groups.push(data.name);
+  }
+}
+
+export async function DeleteGroup(groupName: string) {
+  const deleted = await RemoveGroup(groupName);
+  const group = deleted && groups[groupName];
+
+  if (!group) throw new Error(`Cannot delete OxGroup<${groupName}> (no group exists with that name)`);
+
   let parent = group.principal;
 
   removeAce(parent, parent, true);
@@ -95,20 +125,26 @@ function DeleteGroup(group: OxGroup) {
     parent = child;
   }
 
+  const players = OxPlayer.getAll({
+    groups: groupName,
+  });
+
+  for (const id in players) {
+    const player = players[id];
+
+    player.setGroup(groupName, 0);
+  }
+
+  GlobalState[group.principal] = null;
+  GlobalState[`${group.name}:count`] = null;
+  GlobalState[`${group.name}:activeCount`] = null;
+
   delete groups[group.name];
 }
 
 async function LoadGroups() {
-  const rows = await SelectGroups();
-
-  if (!rows[0]) return;
-
-  for (let i = 0; i < rows.length; i++) CreateGroup(rows[i]);
-
-  GlobalState.groups = Object.values(groups).reduce((acc, group) => {
-    acc.push(group.name);
-    return acc;
-  }, [] as string[]);
+  const dbGroups = await SelectGroups();
+  GlobalState.groups = dbGroups.map((group) => SetupGroup(group).name);
 }
 
 setImmediate(LoadGroups);
@@ -140,5 +176,8 @@ addCommand<{ target: string; group: string; grade?: number }>(
   }
 );
 
+exports('GetGroupsByType', GetGroupsByType);
 exports('SetGroupPermission', SetGroupPermission);
 exports('RemoveGroupPermission', RemoveGroupPermission);
+exports('CreateGroup', CreateGroup);
+exports('DeleteGroup', DeleteGroup);

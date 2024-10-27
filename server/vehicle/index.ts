@@ -62,8 +62,9 @@ export async function CreateVehicle(
         ? data.plate
         : await OxVehicle.generatePlate();
 
-  const metadata = data.data || ({} as { properties: VehicleProperties; [key: string]: any });
-  metadata.properties = metadata.properties || data.properties;
+  const metadata = data.data || ({} as { properties?: VehicleProperties; [key: string]: any });
+  const properties = data.properties || metadata.properties || ({} as VehicleProperties);
+  delete metadata.properties;
 
   if (!data.id && data.vin) {
     data.id = await CreateNewVehicle(
@@ -80,7 +81,7 @@ export async function CreateVehicle(
 
   if (!entity) return;
 
-  const vehicle = new OxVehicle(
+  return new OxVehicle(
     entity,
     invokingScript,
     data.plate,
@@ -88,17 +89,12 @@ export async function CreateVehicle(
     vehicleData.make,
     data.stored || null,
     metadata,
+    properties,
     data.id,
     data.vin,
     data.owner,
     data.group
   );
-
-  const state = vehicle.getState();
-
-  state.set('initVehicle', true, true);
-
-  return vehicle;
 }
 
 export async function SpawnVehicle(id: number, coords: Vec3, heading?: number) {
@@ -106,8 +102,6 @@ export async function SpawnVehicle(id: number, coords: Vec3, heading?: number) {
   const vehicle = await GetStoredVehicleFromId(id);
 
   if (!vehicle) return;
-
-  vehicle.data = JSON.parse(vehicle.data as any);
 
   return await CreateVehicle(vehicle, coords, heading, invokingScript);
 }
